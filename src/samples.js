@@ -51,16 +51,36 @@ export const riskTriple = {
   expect: { ok: false, firstKind: 'triple' },
 };
 
-/** 风险：零面积三重接触（三条带仅在 (16,15) 一点共同接触） */
-export const riskTriplePoint = {
-  name: '风险·三重接触点',
-  workarea: [[0, 0], [30, 0], [30, 30], [0, 30]],
+/** 风险：零面积三重接触线段（三条带沿 x=0、y∈[0,10] 整段闭集接触，面积为 0） */
+export const riskTripleSegment = {
+  name: '风险·三重接触线段',
+  workarea: [[0, 0], [10, 0], [10, 10], [0, 10]],
   strips: [
-    { cx: 8, cy: 15, w: 16, h: 30, angle: 0 },   // x∈[0,16]
-    { cx: 24, cy: 15, w: 16, h: 30, angle: 0 },  // x∈[16,32]
-    { cx: 16, cy: 22, w: 8, h: 14, angle: 0 },   // 底边 y=15 过点 (16,15)
+    { cx: 5, cy: 5, w: 10, h: 10, angle: 0 },   // [0,10]×[0,10]
+    { cx: 5, cy: 5, w: 10, h: 10, angle: 0 },   // 与 R1 完全重合
+    { cx: -5, cy: 5, w: 10, h: 10, angle: 0 },  // [-10,0]×[0,10]，与前两条沿 x=0 整段相接
   ],
-  expect: { ok: false, firstKind: 'triple', firstShape: 'point' },
+  expect: {
+    ok: false, firstKind: 'triple', firstShape: 'segment',
+    endpoints: [[0, 0], [0, 10]], multiplicity: 3, riskCount: 1,
+  },
 };
 
-export const samples = [qualifiedBoundary, qualifiedRotated, riskGap, riskTriple, riskTriplePoint];
+/** 风险：零面积三重接触点（三条带仅在 (20,10) 一点角点相抵） */
+export const riskTriplePoint = {
+  name: '风险·三重接触点',
+  workarea: [[0, 0], [20, 0], [20, 20], [0, 20]],
+  strips: [
+    { cx: 10, cy: 5, w: 20, h: 10, angle: 0 },  // y∈[0,10]
+    { cx: 10, cy: 15, w: 20, h: 10, angle: 0 }, // y∈[10,20]，与 R1 共线 y=10（二重）
+    { cx: 25, cy: 15, w: 10, h: 10, angle: 0 }, // x∈[20,30]，仅角点 (20,10) 同时相抵
+  ],
+  expect: {
+    ok: false, firstKind: 'triple', firstShape: 'point',
+    representative: [20, 10], multiplicity: 3,
+  },
+};
+
+export const samples = [
+  qualifiedBoundary, qualifiedRotated, riskGap, riskTriple, riskTripleSegment, riskTriplePoint,
+];

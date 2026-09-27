@@ -203,29 +203,163 @@ export function certify(input) {
     else { tripleCells.push(c); stats.tripleArea = stats.tripleArea.plus(c.area); }
   }
 
-  // 4) 顶点闭集检查：捕获零面积三重接触（点/线段状）
+  // 4) 零面积三重接触检测（闭集，边界接触计入）：
+  //    (a) 排列顶点（单元顶点 + 工作区顶点 + 覆盖带角点）计数 → 孤立接触点；
+  //    (b) 落在覆盖带边线上的排列边，以其中点计数 → 连续接触线段。
+  //    排列边的开线段内部覆盖数恒定（越过其他带边线只发生在排列顶点处），
+  //    故将相邻的三重边沿同一直线串成极大线段，避免用两个端点代替整段接触线。
   const vtxKey = (p) => `${Math.round(p.x.toNumber() * 1e9)},${Math.round(p.y.toNumber() * 1e9)}`;
+  const edgeKey = (k1, k2) => (k1 < k2 ? `${k1}|${k2}` : `${k2}|${k1}`);
   const vertMap = new Map();
   const addVert = (p) => { const k = vtxKey(p); if (!vertMap.has(k)) vertMap.set(k, p); };
   for (const c of cellRecs) for (const p of c.vertices) addVert(p);
   for (const p of workarea) addVert(p);
   for (const s of strips) for (const p of s.corners) addVert(p);
 
-  const contacts = [];
+  // 正面积三重单元的边/顶点索引：排列边或顶点若邻接三重单元，即已由区域风险表达。
+  // 排列的凸单元之间只共享整条边或顶点，故集合判定等价于闭集包含（且 O(1)）。
+  const tripleEdgeKeys = new Set();
+  const tripleVertKeys = new Set();
+  for (const c of tripleCells) {
+    for (const p of c.vertices) tripleVertKeys.add(vtxKey(p));
+    for (let i = 0; i < c.vertices.length; i++) {
+      tripleEdgeKeys.add(edgeKey(vtxKey(c.vertices[i]), vtxKey(c.vertices[(i + 1) % c.vertices.length])));
+    }
+  }
+
+  // 顶点闭集覆盖数
+  const vtxCover = new Map(); // key → { covering }
   let vertexMax = 0;
-  for (const v of vertMap.values()) {
+  for (const [k, v] of vertMap) {
     if (!convexContains(workarea, v, vtxTol)) continue;
     const covering = [];
     strips.forEach((s, i) => {
       if (rectContains(s.edges, v, vtxTol)) covering.push(i + 1);
     });
+    vtxCover.set(k, covering);
     if (covering.length > vertexMax) vertexMax = covering.length;
-    if (covering.length >= 3) {
-      const inTripleCell = tripleCells.some((c) => convexContains(c.vertices, v, vtxTol));
-      if (!inTripleCell) contacts.push({ point: v, covering });
+  }
+
+  // 收集落在覆盖带边线上的排列边（去重无向边）
+  const edgeMap = new Map();
+  for (const c of cellRecs) {
+    for (let i = 0; i < c.vertices.length; i++) {
+      const p = c.vertices[i];
+      const q = c.vertices[(i + 1) % c.vertices.length];
+      const k1 = vtxKey(p);
+      const k2 = vtxKey(q);
+      if (k1 === k2) continue;
+      const ek = edgeKey(k1, k2);
+      if (edgeMap.has(ek)) continue;
+      const line = stripLines.find((L) =>
+        lineValue(L, p).abs().lte(lineTol) && lineValue(L, q).abs().lte(lineTol));
+      if (!line) continue; // 仅为工作区边或剖分内部边：不可能产生零面积三重接触
+      edgeMap.set(ek, { p, q, line, key: ek });
     }
   }
+
+  // 每条边中点闭集计数；落在正面积三重单元内的边已由区域风险表达，跳过
+  for (const e of edgeMap.values()) {
+    const mid = { x: e.p.x.plus(e.q.x).div(2), y: e.p.y.plus(e.q.y).div(2) };
+    const covering = [];
+    strips.forEach((s, i) => {
+      if (rectContains(s.edges, mid, vtxTol)) covering.push(i + 1);
+    });
+    e.covering = covering;
+    // 中点覆盖数 <3 时不可能邻接三重单元；否则先查三重单元边集合（O(1)），
+    // 未命中再以闭集包含兜底处理容差边界
+    e.inTripleCell = covering.length >= 3
+      && (tripleEdgeKeys.has(e.key)
+        || tripleCells.some((c) => convexContains(c.vertices, mid, vtxTol)));
+  }
+
+  // 沿同一条边线，把中点覆盖数 ≥3 的边串成连通分量 → 接触线段
+  const lineDir = (L) => ({ x: L.b.neg(), y: L.a }); // 单位法向 (a,b) → 单位方向
+  const contactSegments = [];
+  const edgesByLine = new Map();
+  for (const e of edgeMap.values()) {
+    if (e.covering.length < 3 || e.inTripleCell) continue;
+    if (!edgesByLine.has(e.line)) edgesByLine.set(e.line, []);
+    edgesByLine.get(e.line).push(e);
+  }
+  for (const [L, eds] of edgesByLine) {
+    const d = lineDir(L);
+    const tOf = (p) => p.x.mul(d.x).plus(p.y.mul(d.y));
+    const vToEdges = new Map();
+    eds.forEach((e, idx) => {
+      for (const k of [vtxKey(e.p), vtxKey(e.q)]) {
+        if (!vToEdges.has(k)) vToEdges.set(k, []);
+        vToEdges.get(k).push(idx);
+      }
+    });
+    const used = new Array(eds.length).fill(false);
+    for (let s0 = 0; s0 < eds.length; s0++) {
+      if (used[s0]) continue;
+      const comp = [];
+      const stack = [s0];
+      used[s0] = true;
+      while (stack.length) {
+        const idx = stack.pop();
+        comp.push(eds[idx]);
+        for (const k of [vtxKey(eds[idx].p), vtxKey(eds[idx].q)]) {
+          for (const j of vToEdges.get(k)) {
+            if (!used[j]) { used[j] = true; stack.push(j); }
+          }
+        }
+      }
+      // 连通分量沿直线的极值点即线段端点
+      let pLo = null;
+      let pHi = null;
+      let tLo = null;
+      let tHi = null;
+      const stripSet = new Set();
+      let mult = 0;
+      const consider = (p) => {
+        const t = tOf(p);
+        if (tLo === null || t.lt(tLo)) { tLo = t; pLo = p; }
+        if (tHi === null || t.gt(tHi)) { tHi = t; pHi = p; }
+      };
+      for (const e of comp) {
+        consider(e.p); consider(e.q);
+        e.covering.forEach((n) => stripSet.add(n));
+        if (e.covering.length > mult) mult = e.covering.length;
+      }
+      // 端点处可能有额外覆盖带以角点相抵，层数取闭线段上的最大值
+      for (const p of [pLo, pHi]) {
+        const cov = vtxCover.get(vtxKey(p));
+        if (cov && cov.length > mult) mult = cov.length;
+        if (cov) cov.forEach((n) => stripSet.add(n));
+      }
+      contactSegments.push({
+        line: L, pLo, pHi, tLo, tHi,
+        multiplicity: mult,
+        strips: [...stripSet].sort((a, b) => a - b),
+      });
+    }
+  }
+  let edgeMax = 0;
+  for (const e of edgeMap.values()) {
+    if (!e.inTripleCell && e.covering.length > edgeMax) edgeMax = e.covering.length;
+  }
   if (vertexMax > stats.maxMultiplicity) stats.maxMultiplicity = vertexMax;
+  if (edgeMax > stats.maxMultiplicity) stats.maxMultiplicity = edgeMax;
+
+  // 孤立三重接触点：覆盖数 ≥3、不在三重区域内、且不落在任何接触线段上
+  const contacts = [];
+  const pointOnSegment = (p, seg) => {
+    if (lineValue(seg.line, p).abs().gt(lineTol)) return false;
+    const t = lineDir(seg.line).x.mul(p.x).plus(lineDir(seg.line).y.mul(p.y));
+    return t.gte(seg.tLo.minus(vtxTol)) && t.lte(seg.tHi.plus(vtxTol));
+  };
+  for (const [k, v] of vertMap) {
+    const covering = vtxCover.get(k);
+    if (!covering || covering.length < 3) continue;
+    // 顶点集合查找 O(1)，未命中再以闭集包含兜底
+    if (tripleVertKeys.has(k)) continue;
+    if (tripleCells.some((c) => convexContains(c.vertices, v, vtxTol))) continue;
+    if (contactSegments.some((seg) => pointOnSegment(v, seg))) continue;
+    contacts.push({ point: v, covering });
+  }
 
   // 5) 边界证据：单元边 ↔ 边线归属匹配
   const allLines = [...stripLines, ...waLines];
@@ -249,6 +383,24 @@ export function certify(input) {
     const labels = new Set();
     for (const L of allLines) {
       if (lineValue(L, p).abs().lte(lineTol)) for (const o of L.owners) labels.add(ownerLabel(o));
+    }
+    return [...labels];
+  }
+  function segmentEvidence(seg) {
+    const labels = new Set();
+    // 承载接触线的覆盖带边线（三条带的边界证据均保留）
+    for (const o of seg.line.owners) labels.add(ownerLabel(o));
+    // 与接触线共线的工作区边
+    for (const L of waLines) {
+      if (sameLine(L, seg.line, eps, lineTol)
+        && lineValue(L, seg.pLo).abs().lte(lineTol)
+        && lineValue(L, seg.pHi).abs().lte(lineTol)) {
+        for (const o of L.owners) labels.add(ownerLabel(o));
+      }
+    }
+    // 端点处相抵的其他带边线/工作区边
+    for (const p of [seg.pLo, seg.pHi]) {
+      for (const label of pointEvidence(p)) labels.add(label);
     }
     return [...labels];
   }
@@ -295,6 +447,22 @@ export function certify(input) {
       vertices: [p],
       boundary: pointEvidence(ct.point),
       strips: ct.covering,
+    });
+  });
+  contactSegments.forEach((seg, i) => {
+    const lo = [num(seg.pLo.x), num(seg.pLo.y)];
+    const hi = [num(seg.pHi.x), num(seg.pHi.y)];
+    risks.push({
+      id: `L${i + 1}`,
+      kind: 'triple',
+      shape: 'segment',
+      multiplicity: seg.multiplicity,
+      area: 0,
+      representative: [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2],
+      endpoints: [lo, hi],
+      vertices: [lo, hi],
+      boundary: segmentEvidence(seg),
+      strips: seg.strips,
     });
   });
 

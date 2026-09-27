@@ -5,7 +5,7 @@
  */
 import { certify } from '../src/certify.js';
 import {
-  qualifiedBoundary, qualifiedRotated, riskGap, riskTriple, riskTriplePoint,
+  qualifiedBoundary, qualifiedRotated, riskGap, riskTriple, riskTripleSegment, riskTriplePoint,
 } from '../src/samples.js';
 
 let failures = 0;
@@ -18,6 +18,10 @@ function check(name, cond, detail = '') {
 
 function approx(a, b, tol = 1e-6) {
   return Math.abs(a - b) <= tol * Math.max(1, Math.abs(b));
+}
+
+function ptsEq(a, b, tol = 1e-9) {
+  return Array.isArray(a) && Array.isArray(b) && approx(a[0], b[0], tol) && approx(a[1], b[1], tol);
 }
 
 function scenario(title, input, expect) {
@@ -48,6 +52,25 @@ function scenario(title, input, expect) {
     check(`首个风险形态=${expect.firstShape}`, report.firstRisk?.shape === expect.firstShape,
       `实际 ${report.firstRisk?.shape}`);
   }
+  if (expect.endpoints) {
+    const ep = report.firstRisk?.endpoints;
+    check('首个风险端点与预期一致',
+      Array.isArray(ep) && ptsEq(ep[0], expect.endpoints[0]) && ptsEq(ep[1], expect.endpoints[1]),
+      `实际 ${JSON.stringify(ep)}`);
+  }
+  if (expect.representative) {
+    const p = report.firstRisk?.representative;
+    check('首个风险代表点与预期一致',
+      Array.isArray(p) && ptsEq(p, expect.representative), `实际 ${JSON.stringify(p)}`);
+  }
+  if (expect.multiplicity !== undefined) {
+    check(`首个风险层数=${expect.multiplicity}`, report.firstRisk?.multiplicity === expect.multiplicity,
+      `实际 ${report.firstRisk?.multiplicity}`);
+  }
+  if (expect.riskCount !== undefined) {
+    check(`风险总数=${expect.riskCount}`, report.risks.length === expect.riskCount,
+      `实际 ${report.risks.length}`);
+  }
   if (expect.gapArea !== undefined) {
     check(`漏拍面积≈${expect.gapArea}`, approx(report.stats.gapArea, expect.gapArea),
       `实际 ${report.stats.gapArea}`);
@@ -64,8 +87,13 @@ scenario('合格 · 边界接触（轴对齐）', qualifiedBoundary, { ok: true 
 scenario('合格 · 旋转 30° 条带', qualifiedRotated, { ok: true });
 scenario('风险 · 漏拍（L 形缺口）', riskGap, { ok: false, firstKind: 'gap', gapArea: 164 });
 scenario('风险 · 三重曝光区域', riskTriple, { ok: false, firstKind: 'triple', tripleArea: 300 });
+scenario('风险 · 零面积三重接触线段', riskTripleSegment, {
+  ok: false, firstKind: 'triple', firstShape: 'segment', tripleArea: 0,
+  endpoints: [[0, 0], [0, 10]], multiplicity: 3, riskCount: 1,
+});
 scenario('风险 · 零面积三重接触点', riskTriplePoint, {
   ok: false, firstKind: 'triple', firstShape: 'point', tripleArea: 0,
+  representative: [20, 10], multiplicity: 3, riskCount: 1,
 });
 
 console.log(failures ? `\n冒烟失败：${failures} 项未通过` : '\n冒烟通过：全部场景符合预期');

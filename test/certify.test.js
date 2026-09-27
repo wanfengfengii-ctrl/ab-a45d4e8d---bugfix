@@ -204,21 +204,60 @@ describe('三重曝光风险', () => {
     assert.ok(r.firstRisk.boundary.includes('R3·左边'));
   });
 
-  test('零面积三重接触点（面积 0 也必须报告，边界接触计入）', () => {
-    const r = certify({ workarea: square(), strips: [
-      { cx: 8, cy: 15, w: 16, h: 30, angle: 0 },
-      { cx: 24, cy: 15, w: 16, h: 30, angle: 0 },
-      { cx: 16, cy: 22, w: 8, h: 14, angle: 0 },
+  test('零面积三重接触线段（整段闭集接触必须报为一条线段，而非两个端点）', () => {
+    const r = certify({ workarea: [[0, 0], [10, 0], [10, 10], [0, 10]], strips: [
+      { cx: 5, cy: 5, w: 10, h: 10, angle: 0 },
+      { cx: 5, cy: 5, w: 10, h: 10, angle: 0 },
+      { cx: -5, cy: 5, w: 10, h: 10, angle: 0 },
+    ]});
+    assert.equal(r.ok, false);
+    assert.equal(r.stats.tripleArea, 0);
+    assert.equal(r.stats.maxMultiplicity, 3);
+    // 只有一项风险，且是线段，而不是 [0,0]、[0,10] 两个互不相连的点
+    assert.equal(r.risks.length, 1);
+    assert.equal(r.firstRisk.kind, 'triple');
+    assert.equal(r.firstRisk.shape, 'segment');
+    assert.equal(r.firstRisk.area, 0);
+    assert.equal(r.firstRisk.multiplicity, 3);
+    assert.deepEqual(r.firstRisk.endpoints, [[0, 0], [0, 10]]);
+    assert.deepEqual(r.firstRisk.strips, [1, 2, 3]);
+    // 三条覆盖带的边界证据均保留
+    assert.ok(r.firstRisk.boundary.includes('R1·左边'));
+    assert.ok(r.firstRisk.boundary.includes('R2·左边'));
+    assert.ok(r.firstRisk.boundary.includes('R3·右边'));
+    // 与工作区左边共线，证据保留
+    assert.ok(r.firstRisk.boundary.includes('工作区·边4'));
+  });
+
+  test('工作区内部的三重接触线段同样报为线段，端点由第三条带的边截出', () => {
+    const r = certify({ workarea: [[0, 0], [10, 0], [10, 10], [0, 10]], strips: [
+      { cx: 2, cy: 5, w: 4, h: 10, angle: 0 },   // x∈[0,4]
+      { cx: 7, cy: 5, w: 6, h: 10, angle: 0 },   // x∈[4,10]，与 R1 共边 x=4（二重）
+      { cx: 5, cy: 5, w: 2, h: 6, angle: 0 },    // x∈[4,6], y∈[2,8]
+    ]});
+    assert.equal(r.risks.length, 1);
+    assert.equal(r.firstRisk.shape, 'segment');
+    assert.deepEqual(r.firstRisk.endpoints, [[4, 2], [4, 8]]);
+    assert.ok(r.firstRisk.boundary.includes('R1·右边'));
+    assert.ok(r.firstRisk.boundary.includes('R2·左边'));
+    assert.ok(r.firstRisk.boundary.includes('R3·左边'));
+  });
+
+  test('零面积三重接触点（真正仅一点角点相抵，面积 0 也必须报告，边界接触计入）', () => {
+    const r = certify({ workarea: [[0, 0], [20, 0], [20, 20], [0, 20]], strips: [
+      { cx: 10, cy: 5, w: 20, h: 10, angle: 0 },
+      { cx: 10, cy: 15, w: 20, h: 10, angle: 0 },
+      { cx: 25, cy: 15, w: 10, h: 10, angle: 0 },
     ]});
     assert.equal(r.ok, false);
     assert.equal(r.stats.tripleArea, 0);
     assert.equal(r.firstRisk.kind, 'triple');
     assert.equal(r.firstRisk.shape, 'point');
     assert.equal(r.firstRisk.area, 0);
-    assert.deepEqual(r.firstRisk.representative, [16, 15]);
+    assert.deepEqual(r.firstRisk.representative, [20, 10]);
     assert.ok(r.firstRisk.boundary.includes('R1·右边'));
-    assert.ok(r.firstRisk.boundary.includes('R2·左边'));
-    assert.ok(r.firstRisk.boundary.includes('R3·底边'));
+    assert.ok(r.firstRisk.boundary.includes('R2·右边'));
+    assert.ok(r.firstRisk.boundary.includes('R3·左边'));
   });
 
   test('漏拍优先于三重曝光作为首个风险', () => {

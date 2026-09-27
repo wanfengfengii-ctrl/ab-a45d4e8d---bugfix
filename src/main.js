@@ -249,7 +249,25 @@ function renderPlan(scene, report = null) {
       ctx.moveTo(X(x), Y(y) - 10); ctx.lineTo(X(x), Y(y) + 10);
       ctx.stroke();
     }
-    // 首个风险区域强调：粗虚线框
+    for (const r of report.risks) {
+      if (r.shape !== 'segment') continue;
+      const [[x1, y1], [x2, y2]] = r.endpoints;
+      ctx.strokeStyle = '#f0a330';
+      ctx.lineWidth = 4;
+      ctx.setLineDash([7, 4]);
+      ctx.beginPath();
+      ctx.moveTo(X(x1), Y(y1)); ctx.lineTo(X(x2), Y(y2));
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // 端点标记，明确整段接触线的起止
+      ctx.fillStyle = '#f0a330';
+      for (const [x, y] of r.endpoints) {
+        ctx.beginPath();
+        ctx.arc(X(x), Y(y), 3.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    // 首个风险区域强调：粗虚线框（区域）/ 粗虚线（线段）
     const f = report.firstRisk;
     if (f && f.shape === 'region') {
       drawPoly(f.vertices);
@@ -258,6 +276,22 @@ function renderPlan(scene, report = null) {
       ctx.setLineDash([8, 4]);
       ctx.stroke();
       ctx.setLineDash([]);
+    } else if (f && f.shape === 'segment') {
+      const [[x1, y1], [x2, y2]] = f.endpoints;
+      ctx.strokeStyle = '#ff2d55';
+      ctx.lineWidth = 6;
+      ctx.setLineDash([8, 4]);
+      ctx.beginPath();
+      ctx.moveTo(X(x1), Y(y1)); ctx.lineTo(X(x2), Y(y2));
+      ctx.stroke();
+      ctx.setLineDash([]);
+    } else if (f && f.shape === 'point') {
+      const [x, y] = f.representative;
+      ctx.strokeStyle = '#ff2d55';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(X(x), Y(y), 11, 0, Math.PI * 2);
+      ctx.stroke();
     }
   }
 
@@ -310,26 +344,37 @@ function renderReport(report) {
       ? '漏拍（0 条带覆盖）'
       : first.shape === 'point'
         ? `三重曝光接触点（${first.multiplicity} 条带，零面积）`
-        : `三重曝光区域（${first.multiplicity} 条带）`;
+        : first.shape === 'segment'
+          ? `三重曝光接触线段（${first.multiplicity} 条带，零面积）`
+          : `三重曝光区域（${first.multiplicity} 条带）`;
+    const shapeRow = first.shape === 'segment'
+      ? `<dt>端点</dt><dd>[${fmt(first.endpoints[0][0], 3)}, ${fmt(first.endpoints[0][1], 3)}] → [${fmt(first.endpoints[1][0], 3)}, ${fmt(first.endpoints[1][1], 3)}]</dd>`
+      : `<dt>代表点</dt><dd>(${fmt(first.representative[0], 3)}, ${fmt(first.representative[1], 3)})</dd>`;
     firstCard = `
       <div class="risk-card ${first.kind === 'triple' ? 'triple' : ''}">
         <div class="title">首个风险区域（${first.id}）</div>
         <dl>
           <dt>类型</dt><dd>${typeText}</dd>
+          <dt>形态</dt><dd>${first.shape === 'segment' ? '连续线段（面积 0）' : first.shape === 'point' ? '点（面积 0）' : '正面积区域'}</dd>
           <dt>面积</dt><dd>${fmt(first.area, 6)}</dd>
-          <dt>代表点</dt><dd>(${fmt(first.representative[0], 3)}, ${fmt(first.representative[1], 3)})</dd>
+          ${shapeRow}
           <dt>涉及覆盖带</dt><dd>${first.strips.length ? first.strips.map((n) => `R${n}`).join('、') : '—'}</dd>
           <dt>边界证据</dt><dd class="evidence">${first.boundary.join('　') || '（工作区内部）'}</dd>
         </dl>
       </div>`;
   }
 
+  const shapeLabel = (shape) => (shape === 'point' ? '点' : shape === 'segment' ? '线段' : '区域');
+  const shapeDetail = (r) => {
+    if (r.shape !== 'segment') return '';
+    return `[${fmt(r.endpoints[0][0], 2)},${fmt(r.endpoints[0][1], 2)}]→[${fmt(r.endpoints[1][0], 2)},${fmt(r.endpoints[1][1], 2)}]`;
+  };
   const rows = report.risks
     .map(
       (r) => `<tr>
         <td>${r.id}</td>
         <td><span class="tag ${r.kind}">${r.kind === 'gap' ? '漏拍' : '三重'}</span></td>
-        <td>${r.shape === 'point' ? '点' : '区域'}</td>
+        <td>${shapeLabel(r.shape)}${shapeDetail(r) ? ` <span class="muted">${shapeDetail(r)}</span>` : ''}</td>
         <td>${r.multiplicity}</td>
         <td>${fmt(r.area, 4)}</td>
         <td>${r.strips.map((n) => `R${n}`).join('、') || '—'}</td>
