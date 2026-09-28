@@ -204,21 +204,52 @@ describe('三重曝光风险', () => {
     assert.ok(r.firstRisk.boundary.includes('R3·左边'));
   });
 
-  test('零面积三重接触点（面积 0 也必须报告，边界接触计入）', () => {
+  test('零面积三重接触点（真正单点：R1 与 R2 仅角点相接，R3 铺满）', () => {
     const r = certify({ workarea: square(), strips: [
-      { cx: 8, cy: 15, w: 16, h: 30, angle: 0 },
-      { cx: 24, cy: 15, w: 16, h: 30, angle: 0 },
-      { cx: 16, cy: 22, w: 8, h: 14, angle: 0 },
+      { cx: 8, cy: 7, w: 16, h: 14, angle: 0 },    // [0,16]×[0,14]
+      { cx: 24, cy: 29, w: 16, h: 30, angle: 0 },  // [16,32]×[14,44]
+      { cx: 15, cy: 15, w: 30, h: 30, angle: 0 },  // 铺满工作区
     ]});
     assert.equal(r.ok, false);
     assert.equal(r.stats.tripleArea, 0);
+    assert.equal(r.stats.gapArea, 0);
+    assert.equal(r.risks.length, 1);
     assert.equal(r.firstRisk.kind, 'triple');
     assert.equal(r.firstRisk.shape, 'point');
     assert.equal(r.firstRisk.area, 0);
-    assert.deepEqual(r.firstRisk.representative, [16, 15]);
+    assert.deepEqual(r.firstRisk.representative, [16, 14]);
     assert.ok(r.firstRisk.boundary.includes('R1·右边'));
     assert.ok(r.firstRisk.boundary.includes('R2·左边'));
-    assert.ok(r.firstRisk.boundary.includes('R3·底边'));
+  });
+
+  test('零面积三重接触线：必须报告为一条连续线段（面积 0、3 层），不得拆成两个端点', () => {
+    const r = certify({
+      workarea: [[0, 0], [10, 0], [10, 10], [0, 10]],
+      strips: [
+        { cx: 5, cy: 5, w: 10, h: 10, angle: 0 },
+        { cx: 5, cy: 5, w: 10, h: 10, angle: 0 },
+        { cx: -5, cy: 5, w: 10, h: 10, angle: 0 },
+      ],
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.stats.tripleArea, 0);
+    assert.equal(r.stats.gapArea, 0);
+    assert.equal(r.stats.maxMultiplicity, 3);
+    assert.equal(r.risks.length, 1, `风险应只有一条线段，实际 ${JSON.stringify(r.risks.map((x) => x.id))}`);
+    const risk = r.risks[0];
+    assert.equal(risk.kind, 'triple');
+    assert.equal(risk.shape, 'segment');
+    assert.equal(risk.area, 0);
+    assert.equal(risk.multiplicity, 3);
+    assert.deepEqual(risk.vertices, [[0, 0], [0, 10]]);
+    assert.deepEqual(risk.representative, [0, 5]);
+    assert.deepEqual(risk.strips, [1, 2, 3]);
+    for (const label of ['R1·左边', 'R2·左边', 'R3·右边']) {
+      assert.ok(risk.boundary.includes(label), `边界证据缺少 ${label}：${JSON.stringify(risk.boundary)}`);
+    }
+    // 风险列表不得再以两个端点代替该线段
+    assert.ok(!r.risks.some((x) => x.shape === 'point'));
+    assert.equal(r.firstRisk, risk);
   });
 
   test('漏拍优先于三重曝光作为首个风险', () => {

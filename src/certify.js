@@ -203,7 +203,10 @@ export function certify(input) {
     else { tripleCells.push(c); stats.tripleArea = stats.tripleArea.plus(c.area); }
   }
 
-  // 4) 顶点闭集检查：捕获零面积三重接触（点/线段状）
+  // 4) 闭集检查：捕获零面积三重接触（接触点 / 接触线段）。
+  //    仅查排列顶点会把「整条共边三重接触」误拆成两个端点接触点，
+  //    因此还要沿覆盖带边线上的单元边扫描开线段中点，并把共线、
+  //    同覆盖集合的相邻区间合并为极大接触线段。
   const vtxKey = (p) => `${Math.round(p.x.toNumber() * 1e9)},${Math.round(p.y.toNumber() * 1e9)}`;
   const vertMap = new Map();
   const addVert = (p) => { const k = vtxKey(p); if (!vertMap.has(k)) vertMap.set(k, p); };
@@ -211,21 +214,145 @@ export function certify(input) {
   for (const p of workarea) addVert(p);
   for (const s of strips) for (const p of s.corners) addVert(p);
 
-  const contacts = [];
-  let vertexMax = 0;
-  for (const v of vertMap.values()) {
-    if (!convexContains(workarea, v, vtxTol)) continue;
+  const coveringAt = (p, tol) => {
     const covering = [];
     strips.forEach((s, i) => {
-      if (rectContains(s.edges, v, vtxTol)) covering.push(i + 1);
+      if (rectContains(s.edges, p, tol)) covering.push(i + 1);
     });
-    if (covering.length > vertexMax) vertexMax = covering.length;
-    if (covering.length >= 3) {
-      const inTripleCell = tripleCells.some((c) => convexContains(c.vertices, v, vtxTol));
-      if (!inTripleCell) contacts.push({ point: v, covering });
+    return covering;
+  };
+
+  // 预索引正面积三重单元的顶点键 / 边键：排列中属于三重单元闭包的顶点与边
+  // 直接并入三重区域（接触点/接触线段只统计三重区域之外的零面积接触），
+  // 避免对每个候选点做 O(三重单元数) 的 Decimal 包含判定。
+  const edgeKeyOf = (p, q) => {
+    const pk = vtxKey(p);
+    const qk = vtxKey(q);
+    return pk < qk ? `${pk}|${qk}` : `${qk}|${pk}`;
+  };
+  const tripleVtxKeys = new Set();
+  const tripleEdgeKeys = new Set();
+  for (const c of tripleCells) {
+    for (const p of c.vertices) tripleVtxKeys.add(vtxKey(p));
+    for (let i = 0; i < c.vertices.length; i++) {
+      tripleEdgeKeys.add(edgeKeyOf(c.vertices[i], c.vertices[(i + 1) % c.vertices.length]));
     }
   }
-  if (vertexMax > stats.maxMultiplicity) stats.maxMultiplicity = vertexMax;
+
+  // 4a) 排列顶点上的闭集接触
+  const contacts = [];
+  let contactMax = 0;
+  for (const v of vertMap.values()) {
+    if (!convexContains(workarea, v, vtxTol)) continue;
+    const covering = coveringAt(v, vtxTol);
+    if (covering.length > contactMax) contactMax = covering.length;
+    if (covering.length >= 3 && !tripleVtxKeys.has(vtxKey(v))) {
+      contacts.push({ point: v, covering });
+    }
+  }
+
+  // 4b) 单元边（落在覆盖带边线上的）中点闭集计数 → 接触区间
+  //     以合并后的覆盖带边线为一组，沿直线用单位方向参数 t 记录区间。
+  //     性能：先用数值（number）粗筛共线，再用 Decimal 精确确认；
+  //     相邻单元共享边，按端点键去重后只处理一次。
+  const stripLinesNum = stripLines.map((sl) => ({
+    owner: sl, a: sl.a.toNumber(), b: sl.b.toNumber(), c: sl.c.toNumber(),
+  }));
+  const numScreen = 1e-9 * Math.max(1, scale);
+  const edgeSeen = new Set();
+  const segGroups = new Map(); // stripLines 元素 → { intervals:[{t0,t1,covering}] }
+  for (const c of cellRecs) {
+    const n = c.vertices.length;
+    for (let i = 0; i < n; i++) {
+      const p = c.vertices[i];
+      const q = c.vertices[(i + 1) % n];
+      const len2 = p.x.minus(q.x).pow(2).plus(p.y.minus(q.y).pow(2));
+      if (len2.lte(lineTol.mul(lineTol))) continue;
+      const pk = vtxKey(p);
+      const qk = vtxKey(q);
+      const edgeKey = pk < qk ? `${pk}|${qk}` : `${qk}|${pk}`;
+      if (edgeSeen.has(edgeKey)) continue;
+      edgeSeen.add(edgeKey);
+      // 数值粗筛：先用 number 构造单位法向，只有接近某条覆盖带边线时才做 Decimal 精确确认。
+      // 同时尝试两种定向，避免近竖直/近水平线在数值与 Decimal 规范定向之间符号不一致而漏配。
+      const npx = p.x.toNumber();
+      const npy = p.y.toNumber();
+      const nqx = q.x.toNumber();
+      const nqy = q.y.toNumber();
+      let ndx = nqx - npx;
+      let ndy = nqy - npy;
+      const nlen = Math.hypot(ndx, ndy);
+      ndx /= nlen; ndy /= nlen;
+      const na0 = -ndy;
+      const nb0 = ndx;
+      const nc0 = na0 * npx + nb0 * npy;
+      const matchesOrient = (na, nb, nc) => stripLinesNum.find((sl) =>
+        Math.abs(sl.a - na) <= numScreen &&
+        Math.abs(sl.b - nb) <= numScreen &&
+        Math.abs(sl.c - nc) <= numScreen);
+      const candidate = matchesOrient(na0, nb0, nc0) || matchesOrient(-na0, -nb0, -nc0);
+      if (!candidate) continue; // 绝大多数单元边与覆盖带边线无关：廉价跳过
+      const L = canonical(lineFromPoints(p, q));
+      if (!sameLine(candidate.owner, L, eps, lineTol)) continue;
+      const owner = candidate.owner;
+      const mid = { x: p.x.plus(q.x).div(2), y: p.y.plus(q.y).div(2) };
+      const covering = coveringAt(mid, eps);
+      if (covering.length > contactMax) contactMax = covering.length;
+      if (covering.length < 3) continue;
+      // 邻接正面积三重单元的边归入三重区域，不另立零面积风险
+      if (tripleEdgeKeys.has(edgeKey)) continue;
+      // 单位方向 d=(-b,a)，直线上取原点投影 o=c(a,b)，参数 t=d·(r-o)
+      const dx = L.b.neg();
+      const dy = L.a;
+      const ox = L.a.mul(L.c);
+      const oy = L.b.mul(L.c);
+      const tOf = (r) => dx.mul(r.x.minus(ox)).plus(dy.mul(r.y.minus(oy)));
+      let t0 = tOf(p);
+      let t1 = tOf(q);
+      if (t1.lt(t0)) [t0, t1] = [t1, t0];
+      let g = segGroups.get(owner);
+      if (!g) { g = { line: L, dx, dy, ox, oy, intervals: [] }; segGroups.set(owner, g); }
+      g.intervals.push({ t0, t1, covering });
+    }
+  }
+  if (contactMax > stats.maxMultiplicity) stats.maxMultiplicity = contactMax;
+
+  // 4c) 合并同一直线上首尾相接/重叠且覆盖集合相同的区间 → 极大接触线段
+  const coverKey = (cv) => cv.join(',');
+  const contactSegments = [];
+  for (const g of segGroups.values()) {
+    const merged = [];
+    const its = g.intervals.sort((u, v) => (u.t0.lt(v.t0) ? -1 : u.t0.gt(v.t0) ? 1 : 0));
+    for (const it of its) {
+      const last = merged[merged.length - 1];
+      if (last && coverKey(last.covering) === coverKey(it.covering) &&
+          it.t0.lte(last.t1.plus(lineTol))) {
+        if (it.t1.gt(last.t1)) last.t1 = it.t1;
+      } else {
+        merged.push({ ...it, covering: [...it.covering] });
+      }
+    }
+    const pointAt = (t) => ({ x: g.ox.plus(g.dx.mul(t)), y: g.oy.plus(g.dy.mul(t)) });
+    const tParam = (r) => g.dx.mul(r.x.minus(g.ox)).plus(g.dy.mul(r.y.minus(g.oy)));
+    for (const m of merged) {
+      if (m.t1.minus(m.t0).lte(lineTol)) continue; // 退化区间交给接触点
+      contactSegments.push({
+        from: pointAt(m.t0), to: pointAt(m.t1), line: g.line,
+        t0: m.t0, t1: m.t1, tParam, covering: m.covering,
+      });
+    }
+  }
+
+  // 4d) 吸收端点接触点：覆盖集合与相邻接触线段一致时，端点只是线段的闭包端点，
+  //     不得再把整段风险拆成两个点风险；端点另有额外覆盖带（层数更高）时保留点风险。
+  const sameCover = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+  const pointLiesOnSegment = (p, seg) => {
+    if (lineValue(seg.line, p).abs().gt(lineTol)) return false;
+    const t = seg.tParam(p);
+    return t.gte(seg.t0.minus(lineTol)) && t.lte(seg.t1.plus(lineTol));
+  };
+  const loneContacts = contacts.filter((ct) => !contactSegments.some((seg) =>
+    sameCover(ct.covering, seg.covering) && pointLiesOnSegment(ct.point, seg)));
 
   // 5) 边界证据：单元边 ↔ 边线归属匹配
   const allLines = [...stripLines, ...waLines];
@@ -249,6 +376,15 @@ export function certify(input) {
     const labels = new Set();
     for (const L of allLines) {
       if (lineValue(L, p).abs().lte(lineTol)) for (const o of L.owners) labels.add(ownerLabel(o));
+    }
+    return [...labels];
+  }
+  function segmentEvidence(seg) {
+    const labels = new Set();
+    for (const L of allLines) {
+      if (sameLine(L, seg.line, eps, lineTol)) {
+        for (const o of L.owners) labels.add(ownerLabel(o));
+      }
     }
     return [...labels];
   }
@@ -283,7 +419,23 @@ export function certify(input) {
       strips: c.covering,
     });
   });
-  contacts.forEach((ct, i) => {
+  contactSegments.forEach((seg, i) => {
+    const a = [num(seg.from.x), num(seg.from.y)];
+    const b = [num(seg.to.x), num(seg.to.y)];
+    const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    risks.push({
+      id: `L${i + 1}`,
+      kind: 'triple',
+      shape: 'segment',
+      multiplicity: seg.covering.length,
+      area: 0,
+      representative: mid,
+      vertices: [a, b],
+      boundary: segmentEvidence(seg),
+      strips: seg.covering,
+    });
+  });
+  loneContacts.forEach((ct, i) => {
     const p = [num(ct.point.x), num(ct.point.y)];
     risks.push({
       id: `P${i + 1}`,

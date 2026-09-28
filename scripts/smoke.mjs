@@ -5,7 +5,7 @@
  */
 import { certify } from '../src/certify.js';
 import {
-  qualifiedBoundary, qualifiedRotated, riskGap, riskTriple, riskTriplePoint,
+  qualifiedBoundary, qualifiedRotated, riskGap, riskTriple, riskTripleLine, riskTriplePoint,
 } from '../src/samples.js';
 
 let failures = 0;
@@ -48,6 +48,29 @@ function scenario(title, input, expect) {
     check(`首个风险形态=${expect.firstShape}`, report.firstRisk?.shape === expect.firstShape,
       `实际 ${report.firstRisk?.shape}`);
   }
+  if (expect.endpoints) {
+    const verts = report.firstRisk?.vertices ?? [];
+    check(`接触线段端点=${JSON.stringify(expect.endpoints)}`,
+      verts.length === 2 && approx(verts[0][0], expect.endpoints[0][0]) &&
+      approx(verts[0][1], expect.endpoints[0][1]) &&
+      approx(verts[1][0], expect.endpoints[1][0]) && approx(verts[1][1], expect.endpoints[1][1]),
+      `实际 ${JSON.stringify(verts)}`);
+  }
+  if (expect.multiplicity !== undefined) {
+    check(`接触层数=${expect.multiplicity}`,
+      report.firstRisk?.multiplicity === expect.multiplicity,
+      `实际 ${report.firstRisk?.multiplicity}`);
+  }
+  if (expect.boundaryAll) {
+    const got = report.firstRisk?.boundary ?? [];
+    for (const label of expect.boundaryAll) {
+      check(`边界证据含「${label}」`, got.includes(label), `实际 ${JSON.stringify(got)}`);
+    }
+  }
+  if (expect.riskCount !== undefined) {
+    check(`风险条目数=${expect.riskCount}`, report.risks?.length === expect.riskCount,
+      `实际 ${report.risks?.length}`);
+  }
   if (expect.gapArea !== undefined) {
     check(`漏拍面积≈${expect.gapArea}`, approx(report.stats.gapArea, expect.gapArea),
       `实际 ${report.stats.gapArea}`);
@@ -64,6 +87,11 @@ scenario('合格 · 边界接触（轴对齐）', qualifiedBoundary, { ok: true 
 scenario('合格 · 旋转 30° 条带', qualifiedRotated, { ok: true });
 scenario('风险 · 漏拍（L 形缺口）', riskGap, { ok: false, firstKind: 'gap', gapArea: 164 });
 scenario('风险 · 三重曝光区域', riskTriple, { ok: false, firstKind: 'triple', tripleArea: 300 });
+scenario('风险 · 零面积三重接触线', riskTripleLine, {
+  ok: false, firstKind: 'triple', firstShape: 'segment', tripleArea: 0,
+  endpoints: [[0, 0], [0, 10]], multiplicity: 3, riskCount: 1,
+  boundaryAll: ['R1·左边', 'R2·左边', 'R3·右边'],
+});
 scenario('风险 · 零面积三重接触点', riskTriplePoint, {
   ok: false, firstKind: 'triple', firstShape: 'point', tripleArea: 0,
 });

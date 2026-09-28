@@ -51,16 +51,34 @@ export const riskTriple = {
   expect: { ok: false, firstKind: 'triple' },
 };
 
-/** 风险：零面积三重接触（三条带仅在 (16,15) 一点共同接触） */
+/** 风险：零面积三重接触线（三条带沿整条工作区边界线 x=0 接触，y∈[0,10]） */
+export const riskTripleLine = {
+  name: '风险·三重接触线',
+  workarea: [[0, 0], [10, 0], [10, 10], [0, 10]],
+  strips: [
+    { cx: 5, cy: 5, w: 10, h: 10, angle: 0 },    // [0,10]×[0,10]
+    { cx: 5, cy: 5, w: 10, h: 10, angle: 0 },    // 与 R1 完全重合
+    { cx: -5, cy: 5, w: 10, h: 10, angle: 0 },   // [-10,0]×[0,10]，仅以右边 x=0 相接
+  ],
+  expect: {
+    ok: false, firstKind: 'triple', firstShape: 'segment', tripleArea: 0,
+    endpoints: [[0, 0], [0, 10]], multiplicity: 3, riskCount: 1,
+    boundaryAll: ['R1·左边', 'R2·左边', 'R3·右边'],
+  },
+};
+
+/** 风险：零面积三重接触点（三条带仅在 (16,14) 一点共同接触，R1 与 R2 仅角点相接） */
 export const riskTriplePoint = {
   name: '风险·三重接触点',
   workarea: [[0, 0], [30, 0], [30, 30], [0, 30]],
   strips: [
-    { cx: 8, cy: 15, w: 16, h: 30, angle: 0 },   // x∈[0,16]
-    { cx: 24, cy: 15, w: 16, h: 30, angle: 0 },  // x∈[16,32]
-    { cx: 16, cy: 22, w: 8, h: 14, angle: 0 },   // 底边 y=15 过点 (16,15)
+    { cx: 8, cy: 7, w: 16, h: 14, angle: 0 },    // [0,16]×[0,14]，右上角 (16,14)
+    { cx: 24, cy: 29, w: 16, h: 30, angle: 0 },  // [16,32]×[14,44]，左下角 (16,14)
+    { cx: 15, cy: 15, w: 30, h: 30, angle: 0 },  // 铺满工作区，保证无漏拍
   ],
   expect: { ok: false, firstKind: 'triple', firstShape: 'point' },
 };
 
-export const samples = [qualifiedBoundary, qualifiedRotated, riskGap, riskTriple, riskTriplePoint];
+export const samples = [
+  qualifiedBoundary, qualifiedRotated, riskGap, riskTriple, riskTripleLine, riskTriplePoint,
+];

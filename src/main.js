@@ -218,6 +218,14 @@ function renderPlan(scene, report = null) {
     ctx.fillText(`R${i + 1}`, X(cx) - 8, Y(cy) + 4);
   });
 
+  // 工作区边界（先于风险标记描边，确保落在工作区边界上的接触线/接触点可见）
+  if (scene.workarea?.length >= 3) {
+    drawPoly(scene.workarea);
+    ctx.strokeStyle = report ? '#cfe0f2' : '#9fb4cc';
+    ctx.lineWidth = report ? 2 : 1.6;
+    ctx.stroke();
+  }
+
   // 风险区域（认证后）
   if (report) {
     for (const r of report.risks) {
@@ -237,6 +245,22 @@ function renderPlan(scene, report = null) {
       ctx.setLineDash([]);
     }
     for (const r of report.risks) {
+      if (r.shape !== 'segment') continue;
+      const [[x0, y0], [x1, y1]] = r.vertices;
+      ctx.strokeStyle = '#f0a330';
+      ctx.lineWidth = 4;
+      ctx.setLineDash([7, 4]);
+      ctx.beginPath();
+      ctx.moveTo(X(x0), Y(y0)); ctx.lineTo(X(x1), Y(y1));
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // 端点小方块，提示整条接触线为闭集
+      ctx.fillStyle = '#f0a330';
+      for (const [x, y] of r.vertices) {
+        ctx.fillRect(X(x) - 3, Y(y) - 3, 6, 6);
+      }
+    }
+    for (const r of report.risks) {
       if (r.shape !== 'point') continue;
       const [x, y] = r.representative;
       ctx.strokeStyle = '#f0a330';
@@ -249,7 +273,7 @@ function renderPlan(scene, report = null) {
       ctx.moveTo(X(x), Y(y) - 10); ctx.lineTo(X(x), Y(y) + 10);
       ctx.stroke();
     }
-    // 首个风险区域强调：粗虚线框
+    // 首个风险区域强调：粗虚线框（区域）/ 粗虚线（接触线段）
     const f = report.firstRisk;
     if (f && f.shape === 'region') {
       drawPoly(f.vertices);
@@ -258,15 +282,16 @@ function renderPlan(scene, report = null) {
       ctx.setLineDash([8, 4]);
       ctx.stroke();
       ctx.setLineDash([]);
+    } else if (f && f.shape === 'segment') {
+      const [[x0, y0], [x1, y1]] = f.vertices;
+      ctx.strokeStyle = '#ff2d55';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([8, 4]);
+      ctx.beginPath();
+      ctx.moveTo(X(x0), Y(y0)); ctx.lineTo(X(x1), Y(y1));
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
-  }
-
-  // 工作区边界置顶
-  if (scene.workarea?.length >= 3) {
-    drawPoly(scene.workarea);
-    ctx.strokeStyle = report ? '#cfe0f2' : '#9fb4cc';
-    ctx.lineWidth = report ? 2 : 1.6;
-    ctx.stroke();
   }
 
   renderLegend(report);
@@ -310,36 +335,44 @@ function renderReport(report) {
       ? '漏拍（0 条带覆盖）'
       : first.shape === 'point'
         ? `三重曝光接触点（${first.multiplicity} 条带，零面积）`
-        : `三重曝光区域（${first.multiplicity} 条带）`;
+        : first.shape === 'segment'
+          ? `三重曝光接触线段（${first.multiplicity} 条带，零面积）`
+          : `三重曝光区域（${first.multiplicity} 条带）`;
+    const positionRow = first.shape === 'segment'
+      ? `<dt>端点</dt><dd>[${fmt(first.vertices[0][0], 3)}, ${fmt(first.vertices[0][1], 3)}] ～ [${fmt(first.vertices[1][0], 3)}, ${fmt(first.vertices[1][1], 3)}]</dd>`
+      : `<dt>代表点</dt><dd>(${fmt(first.representative[0], 3)}, ${fmt(first.representative[1], 3)})</dd>`;
     firstCard = `
       <div class="risk-card ${first.kind === 'triple' ? 'triple' : ''}">
         <div class="title">首个风险区域（${first.id}）</div>
         <dl>
           <dt>类型</dt><dd>${typeText}</dd>
           <dt>面积</dt><dd>${fmt(first.area, 6)}</dd>
-          <dt>代表点</dt><dd>(${fmt(first.representative[0], 3)}, ${fmt(first.representative[1], 3)})</dd>
+          ${positionRow}
           <dt>涉及覆盖带</dt><dd>${first.strips.length ? first.strips.map((n) => `R${n}`).join('、') : '—'}</dd>
           <dt>边界证据</dt><dd class="evidence">${first.boundary.join('　') || '（工作区内部）'}</dd>
         </dl>
       </div>`;
   }
 
+  const shapeLabel = (shape) => ({ point: '点', segment: '线段', region: '区域' }[shape] || shape);
   const rows = report.risks
     .map(
       (r) => `<tr>
         <td>${r.id}</td>
         <td><span class="tag ${r.kind}">${r.kind === 'gap' ? '漏拍' : '三重'}</span></td>
-        <td>${r.shape === 'point' ? '点' : '区域'}</td>
+        <td>${shapeLabel(r.shape)}</td>
         <td>${r.multiplicity}</td>
         <td>${fmt(r.area, 4)}</td>
-        <td>${r.strips.map((n) => `R${n}`).join('、') || '—'}</td>
+        <td>${r.shape === 'segment'
+          ? `[${fmt(r.vertices[0][0])}, ${fmt(r.vertices[0][1])}] ～ [${fmt(r.vertices[1][0])}, ${fmt(r.vertices[1][1])}]<br><span class="muted">${r.strips.map((n) => `R${n}`).join('、')}</span>`
+          : r.strips.map((n) => `R${n}`).join('、') || '—'}</td>
       </tr>`,
     )
     .join('');
 
   const riskTable = report.risks.length
     ? `<div class="risk-list"><table>
-        <thead><tr><th>编号</th><th>类型</th><th>形态</th><th>层数</th><th>面积</th><th>覆盖带</th></tr></thead>
+        <thead><tr><th>编号</th><th>类型</th><th>形态</th><th>层数</th><th>面积</th><th>${report.risks.some((r) => r.shape === 'segment') ? '端点 / 覆盖带' : '覆盖带'}</th></tr></thead>
         <tbody>${rows}</tbody></table></div>`
     : '<p class="muted">无风险区域。</p>';
 
